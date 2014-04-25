@@ -35,6 +35,8 @@ class HybridauthModule extends CWebModule
 		return array(
 			'baseUrl' => Yii::app()->getBaseUrl(true),
 			'base_url' => Yii::app()->getBaseUrl(true) . '/hybridauth/callback', // URL for Hybrid_Auth callback
+            'debug_mode' => YII_DEBUG,
+            'debug_file' => Yii::getPathOfAlias('application.runtime.hybridauth').'.log',
 			'providers' => CMap::mergeArray($this->providers, Cii::getHybridAuthProviders()),
 		);
 	}

@@ -15,18 +15,6 @@ class RemoteUserIdentity extends CiiUserIdentity
     public $provider;
 
     /**
-     * The User model
-     * @param Users $_user
-     */
-    private $_user;
-
-    /**
-     * The User ID
-     * @param int $_id
-     */
-    private $_id;
-
-    /**
      * Override of the constructor to populate the class properly
      * @param array $adapter
      * @param string $provider
@@ -66,14 +54,7 @@ class RemoteUserIdentity extends CiiUserIdentity
 			$this->errorCode=self::ERROR_UNKNOWN_IDENTITY;
 
         // The user has already been provided to us, so immediately log the user in using that information
-        $this->_id 					  = $this->_user->id;
-        $this->setState('email', 		$this->_user->email);
-        $this->setState('displayName', 	$this->_user->displayName);
-        $this->setState('status', 		$this->_user->status);
-        $this->setState('role', 		$this->_user->user_role);
-        $this->setstate('apiKey',       $this->generateAPIKey());
-
-        $this->errorCode = self::ERROR_NONE;
+        $this->setIdentity();
 
         return !$this->errorCode;
     }

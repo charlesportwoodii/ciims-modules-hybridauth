@@ -12,16 +12,56 @@ class DefaultController extends CiiController
      * The HybridAuth Adapter
      * @var HybridAdapter $adapter
      */
-    public $adapter;
+    private $_adapter = NULL;
 
-    public function getProfile()
+    /**
+     * The profile data
+     * @param array $_userProfile
+     */
+    private $_userProfile = NULL;
+
+    /**
+     * Retrieves the HybridAuth session ID
+     * @return mixed
+     */
+    private function getSession()
     {
-        $session = Yii::app()->session;
+        if (isset($_SESSION['HA::CONFIG']['php_session_id']))
+            return unserialize($_SESSION['HA::CONFIG']['php_session_id']);
 
-        if (Cii::get($session, 'adapter', false))
-            $session['adapter'] = $this->adapter->getUserProfile();
+        return false;
+    }
 
-        return $session['adapter'];
+    /**
+     * Sets the HybridAuth adapter
+     * @param Hybrid_Provider_Adapter $adapter
+     * @return Hybrid_Provider_Adapter
+     */
+    public function setAdapter($adapter)
+    {
+        return $this->_adapter = $adapter;
+    }
+
+    /**
+     * Retrieves the HybridAuth Adapter from $_SESSION
+     * Don't call getAdapter before setAdapter. Bad vudo if you do
+     * @return Hybrid_Provider_Adapter
+     */
+    public function getAdapter()
+    {
+        return $this->_adapter;
+    }
+
+    /**
+     * Caches the getUserProfile request to prevent rate limiting issues.
+     * @return object
+     */
+    public function getUserProfile()
+    {
+        if ($this->_userProfile == NULL)
+            $this->_userProfile = $this->getAdapter()->getUserProfile();
+
+        return $this->_userProfile;
     }
 
     /**
@@ -71,7 +111,11 @@ class DefaultController extends CiiController
         if (isset($_GET['hauth_start']) || isset($_GET['hauth_done']))
             Hybrid_Endpoint::process();
 
-		return $this->hybridAuth();
+        try {
+		    $this->hybridAuth();
+        } catch (Exception $e) {
+            throw new CHttpException(400, $e->getMessage());
+        }
 	}
 
 	/**
@@ -93,26 +137,19 @@ class DefaultController extends CiiController
         // Load HybridAuth
         $hybridauth = new Hybrid_Auth(Yii::app()->controller->module->getConfig());
 
-        // Connect the adapter
-        $this->adapter = $hybridauth->authenticate($this->getProvider(),$params);
+        if (!$this->adapter)
+            $this->setAdapter($hybridauth->authenticate($this->getProvider(),$params));
 
         // Proceed if we've been connected
         if ($this->adapter->isUserConnected())
 		{
-            // Get the profile and store it in the session immediately
-            $this->getProfile();
-
             // If we have an identity on file, then autheticate as that user.
-            if (!Yii::app()->user->isGuest && $this->hasIdentity())
+            if ($this->authenticate())
             {
-                // Authenticate in as that user, then return them to the previous page
-                if ($this->authenticate())
-                {
-                    Yii::app()->user->setFlash('success', Yii::t('HybridAuth.main', ''));
-                    $this->redirect(Yii::app()->user->returnUrl);
-                }
-                else
-                    throw new CHttpException(403, Yii::t('HybridAuth.main', 'Identity was established, but we were unable to login to your account. Please try again later'));
+                Yii::app()->user->setFlash('success', Yii::t('HybridAuth.main', 'You have been sucessfully logged in!'));
+                if (isset($_GET['next']))
+                    $this->redirect($this->createUrl($_GET['next']));
+                $this->redirect(Yii::app()->getBaseUrl(true));
             }
             else
             {
@@ -131,41 +168,23 @@ class DefaultController extends CiiController
 	}
 
     /**
-     * Determines if we can login as a given user using their provided identity
-     * @return boolean
-     */
-    private function hasIdentity()
-    {
-        $form = new RemoteIdentityForm;
-        $form->attributes = array(
-            'adapter'  => $this->getProfile(),
-            'provider' => $this->getProvider()
-        );
-
-        return $form->authenticate();
-    }
-
-    /**
      * Authenticates in as the user
      * @return boolean
      */
     private function authenticate()
     {
-        // Verify we have the identity before attempting to proceed
-        if ($this->hasIdentity())
-        {
-            $form = new RemoteIdentityForm;
-            $form->attributes = array(
-                'adapter'  => $this->getProfile(),
-                'provider' => $this->getProvider()
-            );
+        $form = new RemoteIdentityForm;
+        $form->attributes = array(
+            'adapter'  => $this->getUserProfile(),
+            'provider' => $this->getProvider()
+        );
 
-            return $form->login();
-        }
-
-        return false;
+        return $form->login();
     }
 
+    /**
+     * Renders the linking form
+     */
     private function renderLinkForm()
     {
         $this->layout = '//layouts/main';
@@ -182,19 +201,14 @@ class DefaultController extends CiiController
             // Populate the model
             $form->attributes = Cii::get($_POST, 'RemoteLinkAccountForm', false);
             $form->provider   = $this->getProvider();
-            $form->adapter    = $this->getProfile();
+            $form->adapter    = $this->getUserProfile();
 
             if ($form->save())
             {
                 if ($this->authenticate())
                 {
-                    Yii::app()->user->setFlash('success', Yii::t('ciims.controllers.Site', 'You have successfully registered an account. Before you can login, please check your email for activation instructions'));
+                    Yii::app()->user->setFlash('success', Yii::t('HybridAuth.main', 'You have successfully logged in via {{provider}}', array('{{provider}}' => $this->getProvider() )));
                     $this->redirect(Yii::app()->user->returnUrl);
-                }
-                else
-                {
-                    // Panic?
-                    throw new CHttpException(500, 'Something broke BADLY');
                 }
             }
         }
@@ -225,18 +239,14 @@ class DefaultController extends CiiController
             // Populate the model
             $form->attributes = Cii::get($_POST, 'RemoteRegistrationForm', false);
             $form->provider   = $this->getProvider();
-            $form->adapter    = $this->getProfile();
+            $form->adapter    = $this->getUserProfile();
+
             if ($form->save())
             {
                 if ($this->authenticate())
                 {
-                    Yii::app()->user->setFlash('success', Yii::t('ciims.controllers.Site', 'You have successfully registered an account. Before you can login, please check your email for activation instructions'));
+                    Yii::app()->user->setFlash('success', Yii::t('HybridAuth.main', 'You have successfully logged in via {{provider}}', array('{{provider}}' => $this->getProvider() )));
                     $this->redirect(Yii::app()->user->returnUrl);
-                }
-                else
-                {
-                    // Panic?
-                    throw new CHttpException(500, 'Something broke BADLY');
                 }
             }
         }

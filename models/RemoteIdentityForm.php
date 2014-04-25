@@ -91,14 +91,13 @@ class RemoteIdentityForm extends CFormModel
      */
     public function login()
     {
-        if (!$this->validate() || !$this->authenticate())
+        if (!$this->authenticate())
             return false;
 
         if($this->_identity->errorCode===RemoteUserIdentity::ERROR_NONE)
 		{
-			$duration = 3600*24;
-			Yii::app()->user->login($this->_identity,$duration);
-			return true;
+            Yii::app()->user->logout();
+			return Yii::app()->user->login($this->_identity,3600*24);
 		}
 		else
 			return false;
