@@ -2,6 +2,54 @@
 
 class DefaultController extends CiiController
 {
+    /**
+     * The Provider name
+     * @var string $_provider
+     */
+    protected $_provider;
+
+    /**
+     * The HybridAuth Adapter
+     * @var HybridAdapter $adapter
+     */
+    public $adapter;
+
+    public function getProfile()
+    {
+        $session = Yii::app()->session;
+
+        if (Cii::get($session, 'adapter', false))
+            $session['adapter'] = $this->adapter->getUserProfile();
+
+        return $session['adapter'];
+    }
+
+    /**
+     * Sets the provider for this controller to use
+     * @param string $provider The Provider Name
+     * @return $provider
+     */
+    public function setProvider($provider=NULL)
+    {
+        // Prevent the provider from being NULL
+        if ($provider == NULL)
+            throw new CException(Yii::t('Hybridauth.main', "You haven't supplied a provider"));
+
+        // Set the property
+        $this->_provider = $provider;
+
+        return $this->_provider;
+    }
+
+    /**
+     * Retrieves the provider name
+     * @return string $this->_provider;
+     */
+    public function getProvider()
+    {
+        return $this->_provider;
+    }
+
 	/**
 	 * Disable filters. This should always return a valid non 304 response
 	 */
@@ -9,116 +57,191 @@ class DefaultController extends CiiController
 	{
 		return array();
 	}
-	
+
+    /**
+     * Initialization path
+     * @param string $provider     The HybridAuth provider
+     * @return void
+     */
 	public function actionIndex($provider=NULL)
 	{
-		if ($provider == 'callback')
-			$this->callback();
-		
-		try {
-			$this->hybridAuth($provider);
-		} catch (Exception $e) { 
-			throw new CHttpException(400, Yii::t('Hybridauth.main', 'Oh Snap! Something went wrong. Please try again later.')); 
-		}
+        // Set the provider
+        $this->setProvider($provider);
 
-		return;
+        if (isset($_GET['hauth_start']) || isset($_GET['hauth_done']))
+            Hybrid_Endpoint::process();
+
+		return $this->hybridAuth();
 	}
 
 	/**
-	 * Main mehod to handle login attempts.  If the user passes authentication with their
-	 * chosen provider then it displays a form for them to choose their username and email.
-	 * The email address they choose is *not* verified.
-	 * 
-	 * @throws Exception if a provider isn't supplied, or it has non-alpha characters
+     * Handles authenticating the user against the remote identity
 	 */
-	private function hybridAuth($provider=NULL)
+	private function hybridAuth()
 	{
-		if ($provider==NULL)
-			throw new CException(Yii::t('Hybridauth.main', "You haven't supplied a provider"));
-
-		$identity = new RemoteUserIdentity();
-
-		if ($identity->authenticate($provider))
+        // Preload some configuration options
+        if (strtolower($this->getProvider()) == 'openid')
 		{
-			// If we found a user and authenticated them, bind this data to the user if it does not already exist
-			$user = UserMetadata::model()->findByAttributes(array('key'=>$provider.'Provider', 'value'=>$identity->userData['id']));
-			if ($user === NULL)
-			{
-				$user = new UserMetadata;
-				$user->user_id = Users::model()->findByAttributes(array('email'=>$identity->userData['email']))->id;
-				$user->key = $provider.'Provider';
-				$user->value = $identity->userData['id'];
-				$user->save();
-			}
-			
-			$user = Users::model()->findByPk($user->user_id);
-
-			// Log the user in with just their email address
-			$model=new LoginForm(true);
-
-			// If the prevvious authentication failed, then the user has been upgraded, and we should attempt to use the bcrypt hash isntead of the md5 one
-			$model->attributes=array(
-				'username'=>isset($user->email) ? $user->email : $identity->userData['email'],
-				'password'=>password_hash($identity->userData['email'], PASSWORD_BCRYPT, array('cost' => 13)),
-			);
-
-			// validate user input and redirect to the previous page if valid
-			if($model->validate() && $model->login())
-				$this->redirect(Yii::app()->user->returnUrl);
-
-			throw new CException(Yii::t('Hybridauth.main', 'Unable to bind to local user'));
+			if (!isset($_GET['openid-identity']))
+				throw new CException(Yii::t('Hybridauth.main', "You chose OpenID but didn't provide an OpenID identifier"));
+			else
+				$params = array("openid_identifier" => $_GET['openid-identity']);
 		}
-		else if ($identity->errorCode == RemoteUserIdentity::ERROR_USERNAME_INVALID)
+		else
+			$params = array();
+
+        // Load HybridAuth
+        $hybridauth = new Hybrid_Auth(Yii::app()->controller->module->getConfig());
+
+        // Connect the adapter
+        $this->adapter = $hybridauth->authenticate($this->getProvider(),$params);
+
+        // Proceed if we've been connected
+        if ($this->adapter->isUserConnected())
 		{
-			// If the user authenticated against the remote network, but we didn't find them locally
-			// Create a local account, and bind this information to it.
-			$user = new Users;
-			$user->attributes = array(
-					'email'=>$identity->userData['email'],
-					'password'=>password_hash($identity->userData['email'], PASSWORD_BCRYPT, array('cost' => 13)),
-					'firstName'=>Cii::get($identity->userData, 'firstName', 'UNKNOWN'),
-					'lastName'=>Cii::get($identity->userData, 'lastName', 'UNKNOWN'),
-					'displayName'=>($provider == 'twitter' ? $identity->userData['firstName'] : $identity->userData['displayName']),
-					'user_role'=>1,
-					'status'=>1
-				);
-			
-			$user->save();
-			
-			$meta = new UserMetadata;
-			$meta->user_id = $user->id;
-			$meta->key = $provider.'Provider';
-			$meta->value = $identity->userData['id'];
-			$meta->save();
-			
-			// Log the user in with just their email address
-			$model=new LoginForm(true);
-			
-			$model->attributes=array(
-				'username'=>$identity->userData['email'],
-				'password'=>password_hash($identity->userData['email'], PASSWORD_BCRYPT, array('cost' => 13)),
-			);
+            // Get the profile and store it in the session immediately
+            $this->getProfile();
 
-			// validate user input and redirect to the previous page if valid
-			if($model->validate() && $model->login())
-				$this->redirect(Yii::app()->user->returnUrl);
-
-			throw new CException(Yii::t('Hybridauth.main', 'Unable to bind new user locally'));
-		}
-		else 
-		{
-			// Panic?	
-			throw new CException(Yii::t('Hybridauth.main', 'We were able to authenticate you against the remote network, but could not sign you in locally.'));
-		}
+            // If we have an identity on file, then autheticate as that user.
+            if (!Yii::app()->user->isGuest && $this->hasIdentity())
+            {
+                // Authenticate in as that user, then return them to the previous page
+                if ($this->authenticate())
+                {
+                    Yii::app()->user->setFlash('success', Yii::t('HybridAuth.main', ''));
+                    $this->redirect(Yii::app()->user->returnUrl);
+                }
+                else
+                    throw new CHttpException(403, Yii::t('HybridAuth.main', 'Identity was established, but we were unable to login to your account. Please try again later'));
+            }
+            else
+            {
+                // If we DON'T have information about this user already on file
+                // If they're not a guest, present them with a form to link their accounts
+                // Otherwise present them with a registration form
+                // We want remote users to have their own identity, rather than just dangling and not being able to actually interact with our site
+                if (!Yii::app()->user->isGuest)
+                    $this->renderLinkForm();
+                else
+                    $this->renderRegisterForm();
+            }
+        }
+        else
+            throw new CHttpException(403, Yii::t('HybridAuth.main', 'Failed to establish remote identity'));
 	}
 
-	/** 
-	 * Action for URL that Hybrid_Auth redirects to when coming back from providers.
-	 * Calls Hybrid_Auth to process login. 
-	 */
-	private function callback()
-	{
-		Hybrid_Endpoint::process();
-	}
+    /**
+     * Determines if we can login as a given user using their provided identity
+     * @return boolean
+     */
+    private function hasIdentity()
+    {
+        $form = new RemoteIdentityForm;
+        $form->attributes = array(
+            'adapter'  => $this->getProfile(),
+            'provider' => $this->getProvider()
+        );
 
+        return $form->authenticate();
+    }
+
+    /**
+     * Authenticates in as the user
+     * @return boolean
+     */
+    private function authenticate()
+    {
+        // Verify we have the identity before attempting to proceed
+        if ($this->hasIdentity())
+        {
+            $form = new RemoteIdentityForm;
+            $form->attributes = array(
+                'adapter'  => $this->getProfile(),
+                'provider' => $this->getProvider()
+            );
+
+            return $form->login();
+        }
+
+        return false;
+    }
+
+    private function renderLinkForm()
+    {
+        $this->layout = '//layouts/main';
+
+		$this->setPageTitle(Yii::t('HybridAuth.main', '{{app_name}} | {{label}}', array(
+			'{{app_name}}' => Cii::getConfig('name', Yii::app()->name),
+            '{{label}}'    => Yii::t('HybridAuth.main', 'Link Your Account')
+		)));
+
+        $form = new RemoteLinkAccountForm;
+
+        if (Cii::get($_POST, 'RemoteLinkAccountForm', false))
+        {
+            // Populate the model
+            $form->attributes = Cii::get($_POST, 'RemoteLinkAccountForm', false);
+            $form->provider   = $this->getProvider();
+            $form->adapter    = $this->getProfile();
+
+            if ($form->save())
+            {
+                if ($this->authenticate())
+                {
+                    Yii::app()->user->setFlash('success', Yii::t('ciims.controllers.Site', 'You have successfully registered an account. Before you can login, please check your email for activation instructions'));
+                    $this->redirect(Yii::app()->user->returnUrl);
+                }
+                else
+                {
+                    // Panic?
+                    throw new CHttpException(500, 'Something broke BADLY');
+                }
+            }
+        }
+
+        // Reuse the register form
+        $this->render('/linkaccount', array('model' => $form));
+    }
+
+    /**
+     * Provides functionality to register a user from a remote user identity
+     * This method reuses the //site/register form and the RegisterForm model
+     */
+    private function renderRegisterForm()
+    {
+        $this->layout = '//layouts/main';
+
+		$this->setPageTitle(Yii::t('HybridAuth.main', '{{app_name}} | {{label}}', array(
+			'{{app_name}}' => Cii::getConfig('name', Yii::app()->name),
+            '{{label}}'    => Yii::t('HybridAuth.main', 'Register an Account From {{provider}}', array(
+                                  '{{provider}}' => $this->getProvider()
+                              ))
+		)));
+
+        $form = new RemoteRegistrationForm;
+
+        if (Cii::get($_POST, 'RemoteRegistrationForm', false))
+        {
+            // Populate the model
+            $form->attributes = Cii::get($_POST, 'RemoteRegistrationForm', false);
+            $form->provider   = $this->getProvider();
+            $form->adapter    = $this->getProfile();
+            if ($form->save())
+            {
+                if ($this->authenticate())
+                {
+                    Yii::app()->user->setFlash('success', Yii::t('ciims.controllers.Site', 'You have successfully registered an account. Before you can login, please check your email for activation instructions'));
+                    $this->redirect(Yii::app()->user->returnUrl);
+                }
+                else
+                {
+                    // Panic?
+                    throw new CHttpException(500, 'Something broke BADLY');
+                }
+            }
+        }
+
+        // Reuse the register form
+        $this->render('//site/register', array('model' => $form));
+    }
 }

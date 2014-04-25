@@ -1,106 +1,80 @@
 <?php
 
-class RemoteUserIdentity extends CBaseUserIdentity {
+class RemoteUserIdentity extends CiiUserIdentity
+{
+    /**
+     * HybridAuth::DefaultController::$adapter->getUserProfile()
+     * @var array $adapter
+     */
+    public $adapter;
 
-	public $id;
-	public $userData;
-	public $loginProviderIdentity;
-	private $_adapter;
+    /**
+     * The provider name
+     * @var string $provider
+     */
+    public $provider;
 
-	/**
-	 * Authenticates a user.
-	 * @return boolean|null whether authentication succeeds.
-	 */
-	public function authenticate($provider=NULL)
-	{
-		Yii::import('application.modules.hybridauth.Hybrid.Hybrid_Auth');
-		
-		if (strtolower($provider) == 'openid')
-		{
-			if (!isset($_GET['openid-identity']))
-			{
-				throw new CException(Yii::t('Hybridauth.main', "You chose OpenID but didn't provide an OpenID identifier"));
-			} 
-			else
-			{
-				$params = array("openid_identifier" => $_GET['openid-identity']);
-			}
-		}
-		else
-		{
-			$params = array();
-		}
-	
-		$hybridauth = new Hybrid_Auth($this->_getConfig());
-		
-		$adapter = $hybridauth->authenticate($provider,$params);
-		
-		if ($adapter->isUserConnected())
-		{
-			$this->userData = (array)$adapter->getUserProfile();
-			$this->userData['id'] = $this->userData['identifier'];
-			
-			// Map an email address if we aren't given one
-			if ($this->userData['email'] == NULL)
-				$this->userData['email'] = $this->userData['id'] . '@' . $provider . '.com';
-			
-			// Attempt to find the user by the email address
-			$user = Users::model()->findByAttributes(array('email'=>$this->userData['email']));
-			$meta = false;
-			
-			// If we didn't find a match via email, check to see if they have logged in before by their provider id
-			if ($user === NULL)
-			{
-				$meta = true;
-				$user = UserMetadata::model()->findByAttributes(array('key'=>$provider.'Provider', 'value'=>$this->userData['id']));
-			}
-			
-			// Set a default error code
-			$this->errorCode = self::ERROR_UNKNOWN_IDENTITY;
-			
-			// Check to see if the email binding worked
-			if ($user === NULL)
-			{
-				// If the user doesn't exist
-				$this->errorCode = self::ERROR_USERNAME_INVALID;
-			}
-			else
-			{
-				// If the user does exist
-				$this->id = $meta ? $user->user_id : $user->id;
-				$this->errorCode = self::ERROR_NONE;
-			}
-			
-			return !$this->errorCode;
-			
-		}
+    /**
+     * The User model
+     * @param Users $_user
+     */
+    private $_user;
 
-	}
+    /**
+     * The User ID
+     * @param int $_id
+     */
+    private $_id;
 
-	/**
-	 * @return integer the ID of the user record
-	 */
-	public function getId()
-	{
-		return $this->id;
-	}
-	
-	/**
-	* Get config
-	* @return string rewritten configuration
-	*/
-	private function _getConfig()
-	{
-		return Yii::app()->controller->module->getConfig();
-	}
+    /**
+     * Override of the constructor to populate the class properly
+     * @param array $adapter
+     * @param string $provider
+     * @param Users $user
+     */
+    public function __construct($adapter, $provider, $user)
+    {
+        $this->adapter  = $adapter;
+        $this->provider = $provider;
+        $this->_user    = $user;
+    }
 
-	/**
-	 * Returns the Adapter provided by Hybrid_Auth.  See http://hybridauth.sourceforge.net
-	 * for details on how to use this
-	 * @return Hybrid_Provider_Adapter adapter
-	 */
-	public function getAdapter()
-	{
-		return $this->_adapter;
-	}
+    /**
+     * Overload of CiiUserIdentity::getUser to return the user model
+     * @return Users $this->_user
+     */
+    public function getUser()
+    {
+        return $this->_user;
+    }
+
+    /**
+     * Overload of CiiUserIdentity::authenticate to authenticate the user
+     * TODO: Is this secure? We're not really authenticating _anything_ in this class, just using what we have provider
+     * @param boolean $force     Unused variable for class extension only
+     * @return boolean $this->errorCode
+     */
+    public function authenticate($force=false)
+    {
+        // Set the error code first
+        $this->errorCode == NULL;
+
+        // Check that the user isn't NULL, or that they're not in a locked state
+        if ($this->_user == NULL)
+            $this->errorCode = Yii_DEBUG ? self::ERROR_USERNAME_INVALID : self::ERROR_UNKNOWN_IDENTITY;
+        else if ($this->_user->status == Users::BANNED || $this->_user->status == Users::INACTIVE || $this->_user->status == Users::PENDING_INVITATION)
+			$this->errorCode=self::ERROR_UNKNOWN_IDENTITY;
+
+        // The user has already been provided to us, so immediately log the user in using that information
+        $this->_id 					  = $this->_user->id;
+        $this->setState('email', 		$this->_user->email);
+        $this->setState('displayName', 	$this->_user->displayName);
+        $this->setState('status', 		$this->_user->status);
+        $this->setState('role', 		$this->_user->user_role);
+        $this->setstate('apiKey',       $this->generateAPIKey());
+
+        $this->errorCode = self::ERROR_NONE;
+
+        return !$this->errorCode;
+    }
 }
