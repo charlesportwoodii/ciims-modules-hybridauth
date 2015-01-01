@@ -25,6 +25,6 @@
     },
     "homepage": "https://www.ciims.org",
     "require": {
-	"hybridauth/hybridauth": "2.2.0.*@dev"
+	"hybridauth/hybridauth": "v2.3.0"
     }
 }
