@@ -42,12 +42,12 @@ class RemoteRegistrationForm extends RegisterForm
         if (parent::save($sendEmail))
         {
             // Then bind the identity to this user permanently
-            $meta = new UserMetadata;
-            $meta->attributes = array(
-                'user_id' => $this->_user->id,
-                'key' => $this->provider.'Provider',
-                'value' => $this->adapter->identifier
-            );
+	    $meta = UserMetadata::model()->generatePrototype('UserMetadata', array(
+		'user_id' => $this->_user->id,
+		'key' => $this->provider.'Provider',
+	    ));
+
+	    $meta->value = $this->adapter->identifier;
 
             // Save the associative object
             return $meta->save();
