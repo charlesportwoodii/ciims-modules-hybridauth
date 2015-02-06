@@ -20,7 +20,7 @@ class HybridauthModule extends CWebModule
 
 		Yii::app()->setComponents(array(
             'messages' => array(
-                'class' => 'ext.cii.components.CiiPHPMessageSource',
+                'class' => 'cii.components.CiiPHPMessageSource',
                 'basePath' => Yii::getPathOfAlias('application.modules.hybridauth')
             )
         ));
